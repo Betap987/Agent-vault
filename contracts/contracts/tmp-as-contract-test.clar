@@ -1,0 +1,3 @@
+(define-public (t (amount uint) (recipient principal))
+  (as-contract (stx-transfer? amount tx-sender recipient))
+)
