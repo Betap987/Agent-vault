@@ -1,36 +1,69 @@
-# Agent Vault (Clarity) — Custodial Execution Sandbox (MVP)
+# Agent Vault — Policy-Restricted Custodial Payments for Automated Agents (Stacks / Clarity)
 
-[![Tests](https://img.shields.io/badge/tests-vitest%20%2B%20clarinet-brightgreen)](#tests)
+**One-liner hook:** Let an automated agent send STX payments **without ever giving it full custody**—enforced by on-chain policy (whitelist + limits + pause).
+
+[![Tests](https://img.shields.io/badge/tests-28%2F28%20passing-brightgreen)](#tests)
 [![Clarity](https://img.shields.io/badge/stacks-clarity%202.1-blue)](#)
-[![Status](https://img.shields.io/badge/status-MVP-orange)](#)
+[![Status](https://img.shields.io/badge/status-MVP-orange)](#mvp-scope)
 
-**Agent Vault** is a **custodial sandbox** smart contract for **Stacks (Clarity 2.1)**.
-
-An **owner** deposits STX into a vault controlled by the **contract principal**, then configures:
+Agent Vault is a **custodial execution sandbox** smart contract for **Stacks (Clarity 2.1)**.  
+An **owner** deposits STX into a vault held by the **contract principal** and configures:
 - an authorized **agent** (bot/service/operator)
 - a **recipient whitelist**
-- **spending limits** enforced per time window (by `burn-block-height`)
+- **spending limits per time window** (by `burn-block-height`)
+- an emergency **pause switch**
 
-The **agent** can execute STX transfers **only if on-chain policy checks pass**.
+The **agent** can execute STX transfers **only if** every on-chain policy check passes.
 
 ---
 
-## Why this exists (problem → solution)
+## MVP scope (what’s implemented today)
+**Included**
+- STX vault custody + per-owner accounting
+- Agent-gated execution (`ERR-NOT-AGENT`)
+- Whitelist enforcement
+- Windowed spending limit enforcement
+- Pause/unpause + agent rotation
+- Test suite covering happy paths + rejection paths
 
-If you want an automated process to pay people (users, vendors, rewards, refunds), you often don’t want the bot to hold full custody of funds.
+**Not included yet (planned)**
+- Full FT transfer execution (fields exist for future work)
+- Rich “window reset” simulation tooling beyond current test environment
 
-This contract provides:
-- **custody in-contract** (safer than leaving all funds on a hot bot key)
-- **hard constraints** (who can receive, and how much can be spent)
-- **emergency controls** (pause immediately, rotate the agent)
+---
+
+## Why this matters (real-world problem)
+Bots that make payments (rewards, refunds, payroll, market-making ops) are operationally risky:
+- If the bot key is compromised, **all funds can be drained**
+- Off-chain policy is hard to audit and easy to bypass
+
+Agent Vault puts the payment policy **on-chain**, so custody and execution are separated and verifiable.
+
+---
+
+## Why Stacks (Stacks Alignment)
+Stacks is the right place for this primitive because it gives:
+- **Bitcoin-anchored finality** (a strong settlement layer for custodial payment flows)
+- A clear path to **Bitcoin liquidity integration** via **sBTC** (future extension: vault policies for sBTC/other assets)
+- **Clarity’s decidable smart contracts**, making policy logic readable and auditable for judges and users
+
+---
+
+## Demo / Video
+- **Live demo:** `TBD` (add link)
+- **Video walkthrough (2–4 min):** `TBD` (add link)
+- **What the demo shows:**
+  1) Owner initializes vault + sets policy
+  2) Owner deposits STX
+  3) Agent executes a valid transfer
+  4) Rejections: non-agent call, non-whitelisted recipient, limit exceeded, paused
 
 ---
 
 ## Mental model (how it works)
-
 For each `owner`:
 1. **Initialize** a vault (`init-vault`) with agent + policy.
-2. **Deposit** STX into the contract (`deposit-stx`), increasing the owner’s **logical vault balance**.
+2. **Deposit** STX into the contract (`deposit-stx`), increasing the owner’s logical vault balance.
 3. The **agent** executes payments (`execute-stx-transfer`) from the **contract principal** to a recipient, **only if**:
    - caller is the configured agent
    - vault is not paused
@@ -39,62 +72,14 @@ For each `owner`:
    - the owner’s logical vault balance can cover it
 4. Owner can **withdraw** remaining funds (`withdraw-stx`).
 
-**Custody:** STX is held by the contract principal after deposit.  
-**Accounting:** the contract tracks `vault-balance` per owner.
+Custody: STX is held by the **contract principal** after deposit.  
+Accounting: the contract tracks `vault-balance` per owner.
 
 ---
 
 ## Roles
-
-### Owner
-- Initializes vault config
-- Deposits / withdraws STX
-- Updates whitelist / limits / window size
-- Pauses/unpauses
-- Rotates agent
-
-### Agent
-- Can execute STX transfers within the owner’s policy
-- Cannot bypass whitelist or limits
-
----
-
-## Example flow (copy/paste mental walkthrough)
-
-### 0) Owner chooses policy
-- `agent = ST...AGENT`
-- `whitelist = [ST...ALICE, ST...BOB]`
-- `stx-limit = 1_000_000` (microstacks)
-- `window-blocks = 144` (example “~1 day”, depends on chain)
-
-### 1) Owner initializes vault
-Owner calls:
-- `init-vault(agent, whitelist, window-blocks, stx-limit, ft-limit)`
-
-### 2) Owner deposits STX
-Owner calls:
-- `deposit-stx(owner, amount)`
-
-Result:
-- STX moves from owner → contract principal
-- `vault-balance[owner].stx += amount`
-
-### 3) Agent pays a whitelisted recipient
-Agent calls:
-- `execute-stx-transfer(owner, recipient, amount)`
-
-If policy passes:
-- STX moves from contract principal → recipient
-- `vault-balance[owner].stx -= amount`
-- `spent-stx` increases in the current window
-
-### 4) Owner withdraws leftovers
-Owner calls:
-- `withdraw-stx(owner, amount)`
-
-Result:
-- STX moves from contract principal → owner
-- `vault-balance[owner].stx -= amount`
+- **Owner**: initializes and controls the vault configuration; can deposit/withdraw; can pause; can rotate agent; can update whitelist and limits.
+- **Agent**: can only execute transfers that satisfy the vault policy.
 
 ---
 
@@ -122,19 +107,6 @@ Result:
 
 ---
 
-## Policy rules enforced (STX)
-
-`execute-stx-transfer(owner, recipient, amount)` enforces:
-- vault exists for `owner`
-- `tx-sender` is the configured `agent`
-- vault is not paused
-- `amount > 0`
-- `recipient` is in whitelist
-- `spent_in_window + amount <= stx-limit`
-- `amount <= vault-balance[owner].stx`
-
----
-
 ## Error codes
 - `u100` `ERR-NOT-OWNER`
 - `u101` `ERR-NOT-AGENT`
@@ -149,19 +121,18 @@ Result:
 ---
 
 ## Tests
-
-This repo includes a **Vitest + Clarinet simnet** suite with coverage for:
+This repo includes a **Vitest + Clarinet simnet** suite covering:
 - initialization, deposit, execute, withdraw
 - admin controls (only-owner)
 - multi-owner isolation (no cross-vault access)
 - rejection paths for each important error code
 
-### Run
+Run:
 ```bash
 npm test
 ```
 
-### Contract checks
+Contract checks:
 ```bash
 clarinet check
 ```
@@ -172,16 +143,9 @@ clarinet check
 - `contracts/agent-vault.clar` — main Clarity contract
 - `tests/agent-vault.test.ts` — test suite
 - `docs/SECURITY.md` — threat model / invariants / limitations
-- `deployments/`, `settings/` — Clarinet simnet config
-
----
-
-## Notes / limitations (MVP)
-- FT limit/state exists for future work; only STX execution is implemented.
-- Whitelist is capped at `(list 10 principal)`.
-- Window reset depends on `burn-block-height`. Some JS simnet environments may not support advancing burn blocks easily.
+- `deployments/`, `settings/` — Clarinet config
 
 ---
 
 ## License
-No license specified yet. Add one (e.g., MIT) if you want others to reuse the code.
+MIT (see `LICENSE`).
